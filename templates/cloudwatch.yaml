@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: cloudwatch-lambda-subscription
+
+Resources:
+  LambdaBasicExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+          Condition: {}
+      Path: /
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  TriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Runtime: python3.6
+      Role: !GetAtt 'LambdaBasicExecutionRole.Arn'
+      MemorySize: 128
+      Timeout: 30
+      Code:
+        ZipFile: |-
+          def handler(event, ctx):
+              print(event)
+
+  TriggerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${TriggerFunction}'
+      RetentionInDays: 30
+
+  CloudWatchEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+      - Arn: !GetAtt TriggerFunction.Arn
+        Id: scheduled-event
+
+  InvokeTriggerFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt TriggerFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CloudWatchEventsRule.Arn
+
+  CloudWatchSubscriptionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Runtime: python3.6
+      Role: !GetAtt 'LambdaBasicExecutionRole.Arn'
+      MemorySize: 128
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import gzip
+          import json
+          from base64 import b64decode
+
+          def decompress(data) -> bytes:
+              return gzip.decompress(data)
+
+          def decode_record(data: dict) -> dict:
+              x = decompress(b64decode(data['data']))
+              return json.loads(x.decode('utf8'))
+
+          def decode_event(event: dict) -> dict:
+              return decode_record(event['awslogs'])
+
+          def handler(event, ctx) -> None:
+              print(json.dumps(decode_event(event)))
+  CloudWatchSubscriptionLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${CloudWatchSubscriptionLambda}'
+      RetentionInDays: 30
+
+  CloudWatchLogSubscription:
+    Type: AWS::Logs::SubscriptionFilter
+    DependsOn: CloudWatchSubscriptionFunctionPermission
+    Properties:
+      DestinationArn: !GetAtt CloudWatchSubscriptionLambda.Arn
+      FilterPattern: ''
+      LogGroupName: !Ref TriggerFunctionLogGroup
+
+  CloudWatchSubscriptionFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt CloudWatchSubscriptionLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: logs.eu-west-1.amazonaws.com
+      SourceArn: !GetAtt TriggerFunctionLogGroup.Arn
+
+

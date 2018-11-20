@@ -1,0 +1,3 @@
+project_code: cloudwatch-subscription-lambda
+profile: default
+region: eu-west-1
